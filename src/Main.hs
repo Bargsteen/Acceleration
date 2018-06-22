@@ -15,47 +15,99 @@ import qualified Helm.Engine.SDL as SDL
 import qualified Helm.Keyboard as Keyboard
 
 data Action = Idle | Tick | Press
-data Model = Model (V2 Double) (V2 Double)
+data Object = Object {mass :: Double, pos :: V2 Double, vel :: V2 Double}
+newtype Model = Model [Object]
 
-
-screenCenter :: V2 Double
-screenCenter = V2 halfW halfW
-  where halfW = screenSize / 2
-
-initial :: (Model, Cmd SDLEngine Action)
-initial = (Model screenCenter (V2 0 0), Cmd.none)
+initial :: [Object] -> (Model, Cmd SDLEngine Action)
+initial objs = (Model objs, Cmd.none)
 
 update :: Model -> Action -> (Model, Cmd SDLEngine Action)
 update model Idle = (model, Cmd.none)
-update (Model pos vel) Tick = (model', Cmd.none)
+update (Model objs) Tick = (Model objs', Cmd.none)
   where
-    vel' = applyGravity vel
-    pos' = pos + vel'
+    objs' = fmap (bounce dimensions . applyVelocity . applyGravity) objs
     dimensions = V2 screenSize screenSize
-    model' = bounce dimensions (Model pos' vel')
-update (Model pos vel) Press = (Model pos' vel', Cmd.none)
+update (Model objs) Press = (Model objs', Cmd.none)
   where
-    vel' = applyWind vel
-    pos' = pos + vel'
+    objs' = fmap applyWind objs
 
 subscriptions :: Sub SDLEngine Action
 subscriptions = Sub.batch [ Time.every Time.millisecond $ const Tick
                       , Keyboard.downs (\k -> if k == Keyboard.SpaceKey then Press else Idle) ]
 
 view :: Model -> Graphics SDLEngine
-view (Model pos _) = Graphics2D $ collage [move pos $ filled (rgb 1 1 1) $ circle 10]
+view (Model objs) = Graphics2D $ collage $ map mkCircleFromObj objs
+  where
+    mkCircleFromObj obj = move (pos obj) $ filled (rgb 1 1 1) $ circle (mass obj)
 
 main :: IO ()
 main = do
   engine <- SDL.startupWith engineConfig
 
+  g <- Rand.newStdGen
+  let r = Rand.randomRs (0, screenSize) g
+  let objs = mkXObjectsFromValues objCount r
   run engine GameConfig
-    { initialFn       = initial
+    { initialFn       = initial objs
     , updateFn        = update
     , subscriptionsFn = subscriptions
     , viewFn          = view
     }
 
+
+
+-- PHYSICS FUNCTIONS --
+
+applyVelocity :: Object -> Object
+applyVelocity (Object m p v) = Object m (p + v) v
+
+applyForce :: V2 Double -> Object -> Object
+applyForce f (Object m p v) = Object m p (v + (f `vDiv` m))
+
+applyGravity :: Object -> Object
+applyGravity obj@(Object m _ _) = applyForce gravity obj
+  where gravity = V2 0 (0.2 * m)
+
+applyWind :: Object -> Object
+applyWind = applyForce wind
+  where wind = V2 0.5 0
+
+bounce :: V2 Double -> Object -> Object
+bounce (V2 lx ly) (Object m (V2 px py) (V2 vx vy)) = Object m (V2 px' py') (V2 vx' vy')
+  where
+    (px', vx') = bounceAndSetPos px vx lx
+    (py', vy') = bounceAndSetPos py vy ly
+    radius = m
+    bounceAndSetPos p v l
+      | p - radius <= 0 = (radius, -v)
+      | p + radius >= l = (l - radius, -v)
+      | otherwise = (p, v)
+
+
+
+-- INIT HELPERS --
+
+mkXObjectsFromValues :: Integral a => a -> [Double] -> [Object]
+mkXObjectsFromValues _ [] = []
+mkXObjectsFromValues _ [_] = []
+mkXObjectsFromValues _ [_,_] = []
+mkXObjectsFromValues count (m:x:y:xs) = if count >= 0 then newObj : mkXObjectsFromValues (count-1) xs else [newObj]
+  where
+    m' = abs $ m * 0.05
+    newObj = Object m' (V2 x y) (V2 0 0)
+
+
+
+-- CONSTANTS --
+
+objCount :: Integer
+objCount = 10
+
+screenCenter :: V2 Double
+screenCenter = V2 halfWSize halfWSize
+
+halfWSize :: Double
+halfWSize = screenSize / 2
 
 screenSize :: Num a => a
 screenSize = 800
@@ -63,8 +115,15 @@ screenSize = 800
 engineConfig :: SDL.SDLEngineConfig
 engineConfig = SDL.SDLEngineConfig (V2 screenSize screenSize) False False "Force"
 
+
+
+-- VECTOR FUNCTIONS --
+
 mult :: Num a => a -> V2 a -> V2 a
 mult s (V2 x y) = V2 (s*x) (s*y)
+
+vDiv :: Fractional a => V2 a -> a -> V2 a
+vDiv (V2 x y) s = V2 (x/s) (y/s)
 
 limit :: (Floating a, Ord a) => a -> V2 a -> V2 a
 limit l v = if mag v > l then mult l (normalize v) else v
@@ -76,18 +135,3 @@ normalize :: Floating a => V2 a -> V2 a
 normalize v@(V2 x y) = V2 (x / m) (y / m)
   where
     m = mag v
-
-applyForce :: Num a => V2 a -> V2 a -> V2 a
-applyForce f a = a + f
-
-applyGravity :: Fractional a => V2 a -> V2 a
-applyGravity = (+ V2 0 0.3)
-
-applyWind :: Fractional a => V2 a -> V2 a
-applyWind = (+ V2 0.4 0)
-
-bounce :: V2 Double -> Model -> Model
-bounce (V2 lx ly) (Model (V2 px py) (V2 vx vy)) = Model (V2 px py) (V2 vx' vy')
-  where
-    vx' = if px <= 0 || px >= lx then (-vx) else vx
-    vy' = if py <= 0 || py >= ly then (-vy) else vy
