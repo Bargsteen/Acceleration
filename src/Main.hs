@@ -14,28 +14,28 @@ import qualified Helm.Time as Time
 import qualified Helm.Engine.SDL as SDL
 import qualified Helm.Keyboard as Keyboard
 
-data Action = Idle | Tick | AddRandomAcceleration Rand.StdGen | Press
+data Action = Idle | Tick | Press
 data Model = Model (V2 Double) (V2 Double)
 
 
 screenCenter :: V2 Double
-screenCenter = V2 400 400
+screenCenter = V2 halfW halfW
+  where halfW = screenSize / 2
 
 initial :: (Model, Cmd SDLEngine Action)
 initial = (Model screenCenter (V2 0 0), Cmd.none)
 
 update :: Model -> Action -> (Model, Cmd SDLEngine Action)
 update model Idle = (model, Cmd.none)
-update model Tick = (model, Cmd.execute Rand.newStdGen AddRandomAcceleration)
-update (Model pos vel) (AddRandomAcceleration rd) = (Model pos' vel', Cmd.none)
+update (Model pos vel) Tick = (model', Cmd.none)
   where
-    generated = Rand.randomRs (-0.1, 0.1) rd
-    rdAcc = (\(x:y:_) -> V2 x y) generated
-    pos' = pos + vel
-    vel' = limit 5 $ vel + rdAcc
+    vel' = applyGravity vel
+    pos' = pos + vel'
+    dimensions = V2 screenSize screenSize
+    model' = bounce dimensions (Model pos' vel')
 update (Model pos vel) Press = (Model pos' vel', Cmd.none)
   where
-    vel' = limit 5 $ vel + mult 0.01 (screenCenter - pos)
+    vel' = applyWind vel
     pos' = pos + vel'
 
 subscriptions :: Sub SDLEngine Action
@@ -43,11 +43,11 @@ subscriptions = Sub.batch [ Time.every Time.millisecond $ const Tick
                       , Keyboard.downs (\k -> if k == Keyboard.SpaceKey then Press else Idle) ]
 
 view :: Model -> Graphics SDLEngine
-view (Model pos _) = Graphics2D $ collage [move pos $ filled (rgb 1 1 1) $ circle 5]
+view (Model pos _) = Graphics2D $ collage [move pos $ filled (rgb 1 1 1) $ circle 10]
 
 main :: IO ()
 main = do
-  engine <- SDL.startup
+  engine <- SDL.startupWith engineConfig
 
   run engine GameConfig
     { initialFn       = initial
@@ -56,7 +56,14 @@ main = do
     , viewFn          = view
     }
 
-mult :: (Floating a) => a -> V2 a -> V2 a
+
+screenSize :: Num a => a
+screenSize = 800
+
+engineConfig :: SDL.SDLEngineConfig
+engineConfig = SDL.SDLEngineConfig (V2 screenSize screenSize) False False "Force"
+
+mult :: Num a => a -> V2 a -> V2 a
 mult s (V2 x y) = V2 (s*x) (s*y)
 
 limit :: (Floating a, Ord a) => a -> V2 a -> V2 a
@@ -69,3 +76,18 @@ normalize :: Floating a => V2 a -> V2 a
 normalize v@(V2 x y) = V2 (x / m) (y / m)
   where
     m = mag v
+
+applyForce :: Num a => V2 a -> V2 a -> V2 a
+applyForce f a = a + f
+
+applyGravity :: Fractional a => V2 a -> V2 a
+applyGravity = (+ V2 0 0.3)
+
+applyWind :: Fractional a => V2 a -> V2 a
+applyWind = (+ V2 0.4 0)
+
+bounce :: V2 Double -> Model -> Model
+bounce (V2 lx ly) (Model (V2 px py) (V2 vx vy)) = Model (V2 px py) (V2 vx' vy')
+  where
+    vx' = if px <= 0 || px >= lx then (-vx) else vx
+    vy' = if py <= 0 || py >= ly then (-vy) else vy
