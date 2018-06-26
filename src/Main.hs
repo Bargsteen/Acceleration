@@ -29,7 +29,7 @@ update (Model objs) Tick = (Model objs', Cmd.none)
     dimensions = V2 screenSize screenSize
 update (Model objs) (Press Keyboard.DownKey) = (Model objs', Cmd.none)
   where
-    objs' = fmap applyFriction objs
+    objs' = fmap (\obj@(Object _ (V2 x _) _) -> if x <= 200 then applyFriction obj else obj) objs
 update (Model objs) (Press Keyboard.RightKey) = (Model objs', Cmd.none)
   where
     objs' = fmap applyWind objs
@@ -103,8 +103,8 @@ mkXObjectsFromValues _ [_] = []
 mkXObjectsFromValues _ [_,_] = []
 mkXObjectsFromValues count (m:x:y:xs) = if count >= 0 then newObj : mkXObjectsFromValues (count-1) xs else [newObj]
   where
-    m' = abs $ m * 0.05
-    newObj = Object m' (V2 x y) (V2 0 0)
+    m' = abs $ m * 0.03
+    newObj = Object m' (V2 x (screenSize - m')) (V2 0 0) -- Quick solution, every ball starts at the bottom
 
 
 
