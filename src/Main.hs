@@ -14,7 +14,7 @@ import qualified Helm.Time as Time
 import qualified Helm.Engine.SDL as SDL
 import qualified Helm.Keyboard as Keyboard
 
-data Action = Idle | Tick | Press
+data Action = Idle | Tick | Press Keyboard.Key
 data Object = Object {mass :: Double, pos :: V2 Double, vel :: V2 Double}
 newtype Model = Model [Object]
 
@@ -27,18 +27,23 @@ update (Model objs) Tick = (Model objs', Cmd.none)
   where
     objs' = fmap (bounce dimensions . applyVelocity . applyGravity) objs
     dimensions = V2 screenSize screenSize
-update (Model objs) Press = (Model objs', Cmd.none)
+update (Model objs) (Press Keyboard.DownKey) = (Model objs', Cmd.none)
+  where
+    objs' = fmap applyFriction objs
+update (Model objs) (Press Keyboard.RightKey) = (Model objs', Cmd.none)
   where
     objs' = fmap applyWind objs
+update model (Press _) = (model, Cmd.none)
 
 subscriptions :: Sub SDLEngine Action
 subscriptions = Sub.batch [ Time.every Time.millisecond $ const Tick
-                      , Keyboard.downs (\k -> if k == Keyboard.SpaceKey then Press else Idle) ]
+                      , Keyboard.downs Press ]
 
 view :: Model -> Graphics SDLEngine
-view (Model objs) = Graphics2D $ collage $ map mkCircleFromObj objs
+view (Model objs) = Graphics2D $ collage $ ([bg] ++) $ map mkCircleFromObj objs
   where
-    mkCircleFromObj obj = move (pos obj) $ filled (rgb 1 1 1) $ circle (mass obj)
+    mkCircleFromObj obj = move (pos obj) $ filled (rgba 0.8 0.8 0.8 0.8) $ circle (mass obj)
+    bg = filled (rgb 0.1 0.1 0.1) $ square $ screenSize * 4
 
 main :: IO ()
 main = do
@@ -72,6 +77,12 @@ applyWind :: Object -> Object
 applyWind = applyForce wind
   where wind = V2 0.5 0
 
+
+applyFriction :: Object -> Object
+applyFriction obj = applyForce friction obj
+  where friction = mult (-2) $ normalize $ vel obj
+
+
 bounce :: V2 Double -> Object -> Object
 bounce (V2 lx ly) (Object m (V2 px py) (V2 vx vy)) = Object m (V2 px' py') (V2 vx' vy')
   where
@@ -82,7 +93,6 @@ bounce (V2 lx ly) (Object m (V2 px py) (V2 vx vy)) = Object m (V2 px' py') (V2 v
       | p - radius <= 0 = (radius, -v)
       | p + radius >= l = (l - radius, -v)
       | otherwise = (p, v)
-
 
 
 -- INIT HELPERS --
