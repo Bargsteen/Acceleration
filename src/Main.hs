@@ -14,7 +14,7 @@ import qualified Helm.Time as Time
 import qualified Helm.Engine.SDL as SDL
 import qualified Helm.Keyboard as Keyboard
 
-data Action = Idle | Tick | Press Keyboard.Key
+data Action = Idle | Tick | Press Keyboard.Key | NewState [Object]
 data Object = Object {mass :: Double, pos :: V2 Double, vel :: V2 Double}
 newtype Model = Model [Object]
 
@@ -27,31 +27,29 @@ update (Model objs) Tick = (Model objs', Cmd.none)
   where
     objs' = fmap (bounce dimensions . applyVelocity . applyGravity) objs
     dimensions = V2 screenSize screenSize
-update (Model objs) (Press Keyboard.DownKey) = (Model objs', Cmd.none)
-  where
-    objs' = fmap (\obj@(Object _ (V2 x _) _) -> if x <= 200 then applyFriction obj else obj) objs
-update (Model objs) (Press Keyboard.RightKey) = (Model objs', Cmd.none)
-  where
-    objs' = fmap applyWind objs
-update model (Press _) = (model, Cmd.none)
+update (Model objs) (Press k) =
+  case k of
+    Keyboard.DownKey -> (Model $ fmap (applyDragInArea (V2 0 400, V2 600 600)) objs, Cmd.none)
+    Keyboard.RightKey -> (Model $ fmap applyWind objs, Cmd.none)
+    Keyboard.ReturnKey -> (Model objs, Cmd.execute mkRandomObjects NewState)
+    _ -> (Model objs, Cmd.none)
+update _ (NewState newObjs) = (Model newObjs, Cmd.none)
 
 subscriptions :: Sub SDLEngine Action
 subscriptions = Sub.batch [ Time.every Time.millisecond $ const Tick
                       , Keyboard.downs Press ]
 
 view :: Model -> Graphics SDLEngine
-view (Model objs) = Graphics2D $ collage $ ([bg] ++) $ map mkCircleFromObj objs
+view (Model objs) = Graphics2D $ collage $ ([bg, dragArea] ++) $ map mkCircleFromObj objs
   where
     mkCircleFromObj obj = move (pos obj) $ filled (rgba 0.8 0.8 0.8 0.8) $ circle (mass obj)
     bg = filled (rgb 0.1 0.1 0.1) $ square $ screenSize * 4
+    dragArea = move (V2 300 500) $ filled (rgb 0.3 0.3 0.3) $ rect $ V2 600 200
 
 main :: IO ()
 main = do
   engine <- SDL.startupWith engineConfig
-
-  g <- Rand.newStdGen
-  let r = Rand.randomRs (0, screenSize) g
-  let objs = mkXObjectsFromValues objCount r
+  objs <- mkRandomObjects
   run engine GameConfig
     { initialFn       = initial objs
     , updateFn        = update
@@ -60,6 +58,12 @@ main = do
     }
 
 
+mkRandomObjects :: IO [Object]
+mkRandomObjects = do
+  g <- Rand.newStdGen
+  let r = Rand.randomRs (0, screenSize) g
+  let objs = mkXObjectsFromValues objCount r
+  return objs
 
 -- PHYSICS FUNCTIONS --
 
@@ -80,7 +84,20 @@ applyWind = applyForce wind
 
 applyFriction :: Object -> Object
 applyFriction obj = applyForce friction obj
-  where friction = mult (-2) $ normalize $ vel obj
+  where friction = mult (-0.2) $ normalize $ vel obj
+
+
+type AreaLeftTop = V2 Double
+type AreaRightBottom = V2 Double
+
+applyDragInArea :: (AreaLeftTop, AreaRightBottom) -> Object -> Object
+applyDragInArea (V2 x1 y1, V2 x2 y2) obj = if inArea (pos obj) then applyForce drag obj else obj
+  where
+    n = normalize $ vel obj
+    s = mag $ vel obj
+    factor = -0.5
+    drag = mult (factor * s^(2::Int)) n
+    inArea (V2 px py) = px >= x1 && px <= x2 && py >= y1 && py <= y2
 
 
 bounce :: V2 Double -> Object -> Object
@@ -104,7 +121,7 @@ mkXObjectsFromValues _ [_,_] = []
 mkXObjectsFromValues count (m:x:y:xs) = if count >= 0 then newObj : mkXObjectsFromValues (count-1) xs else [newObj]
   where
     m' = abs $ m * 0.03
-    newObj = Object m' (V2 x (screenSize - m')) (V2 0 0) -- Quick solution, every ball starts at the bottom
+    newObj = Object m' (V2 x y) (V2 0 0)
 
 
 
