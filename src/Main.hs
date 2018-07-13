@@ -2,6 +2,7 @@ module Main where
 
 import Linear.V2 (V2(V2))
 import qualified System.Random as Rand
+import Data.Monoid
 
 import Helm
 import Helm.Color
@@ -16,35 +17,39 @@ import qualified Helm.Keyboard as Keyboard
 
 data Action = Idle | Tick | Press Keyboard.Key | NewState [Object]
 data Object = Object {mass :: Double, pos :: V2 Double, vel :: V2 Double}
-newtype Model = Model [Object]
+data Area = Area {aPos :: V2 Double, dimensions :: V2 Double}
+data Model = Model [Object] [Area]
 
 initial :: [Object] -> (Model, Cmd SDLEngine Action)
-initial objs = (Model objs, Cmd.none)
+initial objs = (Model objs [Area (V2 300 500) (V2 600 200), Area (V2 300 200) (V2 700 40), Area (V2 700 700) (V2 100 100)], Cmd.none)
 
 update :: Model -> Action -> (Model, Cmd SDLEngine Action)
 update model Idle = (model, Cmd.none)
-update (Model objs) Tick = (Model objs', Cmd.none)
+update (Model objs areas) Tick = (Model objs' areas, Cmd.none)
   where
-    objs' = fmap (bounce dimensions . applyVelocity . applyGravity) objs
-    dimensions = V2 screenSize screenSize
-update (Model objs) (Press k) =
+    objs' = fmap (bounce dim . applyDragIfInAnyArea areas . applyVelocity . applyGravity) objs
+    dim = V2 screenSize screenSize
+update (Model objs areas) (Press k) =
   case k of
-    Keyboard.DownKey -> (Model $ fmap (applyDragInArea (V2 0 400, V2 600 600)) objs, Cmd.none)
-    Keyboard.RightKey -> (Model $ fmap applyWind objs, Cmd.none)
-    Keyboard.ReturnKey -> (Model objs, Cmd.execute mkRandomObjects NewState)
-    _ -> (Model objs, Cmd.none)
-update _ (NewState newObjs) = (Model newObjs, Cmd.none)
+    Keyboard.RightKey -> (Model (fmap applyWind objs) areas, Cmd.none)
+    Keyboard.ReturnKey -> (Model objs areas, Cmd.execute mkRandomObjects NewState)
+    _ -> (Model objs areas, Cmd.none)
+update (Model _ areas) (NewState newObjs) = (Model newObjs areas, Cmd.none)
 
 subscriptions :: Sub SDLEngine Action
 subscriptions = Sub.batch [ Time.every Time.millisecond $ const Tick
                       , Keyboard.downs Press ]
 
 view :: Model -> Graphics SDLEngine
-view (Model objs) = Graphics2D $ collage $ ([bg, dragArea] ++) $ map mkCircleFromObj objs
+view (Model objs areas) = Graphics2D $ collage $ map (toForm . collage) [background, areaRects, circles]
   where
-    mkCircleFromObj obj = move (pos obj) $ filled (rgba 0.8 0.8 0.8 0.8) $ circle (mass obj)
-    bg = filled (rgb 0.1 0.1 0.1) $ square $ screenSize * 4
-    dragArea = move (V2 300 500) $ filled (rgb 0.3 0.3 0.3) $ rect $ V2 600 200
+    mkCircleFromObj obj = move (pos obj) $ filled (redIfInArea obj) $ circle (mass obj)
+    redIfInArea obj = if isInAnyArea areas obj then rgba 0.8 0 0 0.8 else rgba 0.8 0.8 0.8 0.8
+    lightGray = rgb 0.3 0.3 0.3
+    darkGray = rgb 0.1 0.1 0.1
+    background = pure $ filled darkGray $ square $ screenSize * 4
+    areaRects = map (\area -> move (aPos area) $ filled lightGray $ rect $ dimensions area) areas
+    circles = map mkCircleFromObj objs
 
 main :: IO ()
 main = do
@@ -90,14 +95,28 @@ applyFriction obj = applyForce friction obj
 type AreaLeftTop = V2 Double
 type AreaRightBottom = V2 Double
 
-applyDragInArea :: (AreaLeftTop, AreaRightBottom) -> Object -> Object
-applyDragInArea (V2 x1 y1, V2 x2 y2) obj = if inArea (pos obj) then applyForce drag obj else obj
+
+isInAnyArea :: [Area] -> Object -> Bool
+isInAnyArea areas obj = getAny $ foldMap (Any . isInArea obj) areas
+
+isInArea :: Object -> Area -> Bool
+isInArea (Object _ (V2 x y) _) (Area (V2 px py) (V2 sx sy)) =
+     x  >= left && x <= right
+  && y  >= top  && y <= bottom
+  where
+    left      = px - sx / 2
+    right     = px + sx / 2
+    top       = py - sy / 2
+    bottom    = py + sy / 2
+
+
+applyDragIfInAnyArea :: [Area] -> Object -> Object
+applyDragIfInAnyArea areas obj = if isInAnyArea areas obj then applyForce drag obj else obj
   where
     n = normalize $ vel obj
     s = mag $ vel obj
-    factor = -0.5
+    factor = -0.1
     drag = mult (factor * s^(2::Int)) n
-    inArea (V2 px py) = px >= x1 && px <= x2 && py >= y1 && py <= y2
 
 
 bounce :: V2 Double -> Object -> Object
