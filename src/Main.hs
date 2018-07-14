@@ -14,37 +14,58 @@ import qualified Helm.Cmd as Cmd
 import qualified Helm.Time as Time
 import qualified Helm.Engine.SDL as SDL
 import qualified Helm.Keyboard as Keyboard
+import qualified Helm.Mouse as Mouse
 
-data Action = Idle | Tick | Press Keyboard.Key | NewState [Object]
+data Action = Idle | Tick | Press Keyboard.Key | NewState [Object] | MouseDown (V2 Double) | MouseUp (V2 Double)
 data Object = Object {mass :: Double, pos :: V2 Double, vel :: V2 Double}
 data Area = Area {aPos :: V2 Double, dimensions :: V2 Double}
-data Model = Model [Object] [Area]
+data Model = Model [Object] [Area] MouseDownPos
+data MouseDirection = Down | Up
+type MouseDownPos = V2 Double
 
 initial :: [Object] -> (Model, Cmd SDLEngine Action)
-initial objs = (Model objs [Area (V2 300 500) (V2 600 200), Area (V2 300 200) (V2 700 40), Area (V2 700 700) (V2 100 100)], Cmd.none)
+initial objs = (Model objs [] (V2 0 0) , Cmd.none)
 
 update :: Model -> Action -> (Model, Cmd SDLEngine Action)
 update model Idle = (model, Cmd.none)
-update (Model objs areas) Tick = (Model objs' areas, Cmd.none)
+update (Model objs areas mouseDownPos) Tick = (Model objs' areas mouseDownPos, Cmd.none)
   where
     objs' = fmap (bounce dim . applyDragIfInAnyArea areas . applyVelocity . applyGravity) objs
     dim = V2 screenSize screenSize
-update (Model objs areas) (Press k) =
+update (Model objs areas mouseDownPos) (Press k) =
   case k of
-    Keyboard.RightKey -> (Model (fmap applyWind objs) areas, Cmd.none)
-    Keyboard.ReturnKey -> (Model objs areas, Cmd.execute mkRandomObjects NewState)
-    _ -> (Model objs areas, Cmd.none)
-update (Model _ areas) (NewState newObjs) = (Model newObjs areas, Cmd.none)
+    Keyboard.RightKey -> (Model (fmap applyWind objs) areas mouseDownPos, Cmd.none)
+    Keyboard.ReturnKey -> (Model objs areas mouseDownPos, Cmd.execute mkRandomObjects NewState)
+    _ -> (Model objs areas mouseDownPos, Cmd.none)
+update (Model objs areas _) (MouseDown downPos) = (Model objs areas downPos, Cmd.none)
+update (Model objs areas (downPos@(V2 downX downY))) (MouseUp upPos@(V2 upX upY)) = (Model objs areas' (V2 0 0), Cmd.none)
+  where
+    width =  abs $ downX - upX
+    height = abs $ downY - upY
+    rectCenter = downPos + mult 0.5 (upPos - downPos)
+    newArea = Area rectCenter (V2 width height)
+    areas' = newArea : areas
+update (Model _ _ mouseDownPos) (NewState newObjs) = (Model newObjs [] mouseDownPos, Cmd.none)
 
 subscriptions :: Sub SDLEngine Action
 subscriptions = Sub.batch [ Time.every Time.millisecond $ const Tick
-                      , Keyboard.downs Press ]
+                          , Keyboard.downs Press
+                          , Mouse.downs (handleMouse Down)
+                          , Mouse.ups   (handleMouse Up)
+                          ]
+
+handleMouse :: MouseDirection -> Mouse.MouseButton -> V2 Int -> Action
+handleMouse direction Mouse.LeftButton (V2 x y) = action (V2 (fromIntegral x) (fromIntegral y))
+  where action = case direction of
+          Down -> MouseDown
+          Up   -> MouseUp
+handleMouse _ _ _ = Idle
 
 view :: Model -> Graphics SDLEngine
-view (Model objs areas) = Graphics2D $ collage $ map (toForm . collage) [background, areaRects, circles]
+view (Model objs areas _) = Graphics2D $ collage $ map (toForm . collage) [background, areaRects, circles]
   where
     mkCircleFromObj obj = move (pos obj) $ filled (redIfInArea obj) $ circle (mass obj)
-    redIfInArea obj = if isInAnyArea areas obj then rgba 0.8 0 0 0.8 else rgba 0.8 0.8 0.8 0.8
+    redIfInArea obj = if isInAnyArea areas obj then rgba 0.5 0.2 0.1 0.8 else rgba 0.8 0.8 0.8 0.8
     lightGray = rgb 0.3 0.3 0.3
     darkGray = rgb 0.1 0.1 0.1
     background = pure $ filled darkGray $ square $ screenSize * 4
